@@ -1,0 +1,4 @@
+repository "kejar-setoran-game/kejar-setoran-game@20066621116587@cloud"
+  path "/"
+    br "/main"
+    co "/main"
