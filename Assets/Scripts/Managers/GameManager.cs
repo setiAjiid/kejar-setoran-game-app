@@ -22,6 +22,11 @@ namespace KejarSetoran.Managers
         public int divisor = 5;
         public int customerTimeoutPenalty = 500;
 
+        [Header("Hint & Penalty")]
+        public int hintCostRp = 200;
+        public float wrongMovePenaltySeconds = 3f;
+        public float hintDurationSeconds = 2f;
+
         public int Money { get; private set; }
         public int Delivered { get; private set; }
         public float TimeRemaining { get; private set; }
@@ -31,12 +36,20 @@ namespace KejarSetoran.Managers
         private PathVisualizer pathVis;
         private float customerStartTime;
 
+        // Dijkstra path is cached but hidden by default. Player must spend Rp
+        // (tap H) to peek for a few seconds. node[0] = player's current/next
+        // position, node[last] = current goal (pickup or delivery).
+        private List<MapNode> currentOptimalPath;
+        private int currentOptimalCost;
+        private float hintTimeRemaining;
+
         public System.Action<MapNode> OnCustomerSpawned;
 
         public void Bind(PlayerController p, CustomerSpawner s, PathVisualizer v)
         {
             player = p; spawner = s; pathVis = v;
             player.OnArriveAtNode += HandleArrive;
+            player.OnDepartTowards += HandleDepart;
             HUDManager.Instance.UpdateTarget(dailyTarget);
         }
 
@@ -97,7 +110,18 @@ namespace KejarSetoran.Managers
                 pathVis.ToggleOverlay();
             }
 
+            if (Input.GetKeyDown(KeyCode.H) && State == GameState.Playing)
+            {
+                RevealHint();
+            }
+
             if (State != GameState.Playing) return;
+
+            if (hintTimeRemaining > 0f)
+            {
+                hintTimeRemaining -= Time.deltaTime;
+                if (hintTimeRemaining <= 0f) ClearHintReveal();
+            }
 
             TimeRemaining -= Time.deltaTime;
             HUDManager.Instance.UpdateTimer(Mathf.Max(0, TimeRemaining), dailyDurationSeconds);
@@ -158,7 +182,7 @@ namespace KejarSetoran.Managers
                 customerStartTime = Time.time;
                 AudioManager.Instance.PlayPickup();
                 HUDManager.Instance.FlashStatus("Penumpang diangkut!");
-                RecomputePath(player.CurrentNode, c.destinationNode);
+                ComputeAndStoreOptimalPath(player.CurrentNode, c.destinationNode);
             }
             else if (c.state == CustomerState.OnBoard && player.CurrentNode == c.destinationNode)
             {
@@ -195,7 +219,7 @@ namespace KejarSetoran.Managers
         {
             var c = spawner.SpawnRandom(player.CurrentNode);
             OnCustomerSpawned?.Invoke(c.pickupNode);
-            RecomputePath(player.CurrentNode, c.pickupNode);
+            ComputeAndStoreOptimalPath(player.CurrentNode, c.pickupNode);
         }
 
         public void OnCustomerTimedOut(Customer c)
@@ -212,34 +236,133 @@ namespace KejarSetoran.Managers
 
         private void HandleArrive(MapNode n)
         {
-            var c = spawner.Current;
-            if (c == null) return;
-            MapNode goal = c.state == CustomerState.Waiting ? c.pickupNode : c.destinationNode;
-            if (goal == null) return;
-            RecomputePath(n, goal);
+            // No-op by design: path trim happens in HandleDepart on correct
+            // moves, and wrong moves recompute there too. Nothing to reveal
+            // here — the player must press H to peek at Dijkstra.
         }
 
-        private void RecomputePath(MapNode from, MapNode to)
+        private MapNode GetCurrentGoal()
         {
-            var result = DijkstraAlgorithm.FindShortestPath(from, to, GraphManager.Instance.Nodes);
-            pathVis.ShowPath(result.path);
-            foreach (var n in GraphManager.Instance.Nodes) n.ResetHighlight();
-            if (result.path != null)
+            var c = spawner.Current;
+            if (c == null) return null;
+            return c.state == CustomerState.Waiting ? c.pickupNode : c.destinationNode;
+        }
+
+        private void ComputeAndStoreOptimalPath(MapNode from, MapNode to)
+        {
+            if (from == null || to == null)
             {
-                foreach (var pn in result.path) pn.SetHighlight(new Color(1f, 0.85f, 0.2f, 0.9f));
+                currentOptimalPath = null;
+                currentOptimalCost = 0;
+                return;
             }
+
+            var result = DijkstraAlgorithm.FindShortestPath(from, to, GraphManager.Instance.Nodes);
+            currentOptimalPath = result.found ? result.path : null;
+            currentOptimalCost = result.cost;
+
+            // Hide algorithm output by default. Spatial markers (current/goal)
+            // stay visible so the player still knows where to go.
+            foreach (var n in GraphManager.Instance.Nodes) n.ResetHighlight();
             from.SetHighlight(new Color(0.3f, 0.95f, 0.4f, 0.95f));
             to.SetHighlight(new Color(0.95f, 0.3f, 0.3f, 0.95f));
+            pathVis.ClearPath();
+            HUDManager.Instance.UpdatePathInfo("");
+        }
 
+        private void RevealHint()
+        {
+            if (currentOptimalPath == null || currentOptimalPath.Count == 0)
+            {
+                HUDManager.Instance.FlashStatus("Tidak ada path untuk di-hint");
+                return;
+            }
+            if (Money < hintCostRp)
+            {
+                HUDManager.Instance.FlashStatus($"Uang kurang untuk hint (Rp {hintCostRp:N0})");
+                return;
+            }
+
+            Money -= hintCostRp;
+            HUDManager.Instance.UpdateMoney(Money);
+            HUDManager.Instance.FlashStatus($"Hint! -Rp {hintCostRp:N0}");
+            AudioManager.Instance.PlayPickup();
+
+            RenderHintReveal();
+            hintTimeRemaining = hintDurationSeconds;
+        }
+
+        private void RenderHintReveal()
+        {
+            if (currentOptimalPath == null || currentOptimalPath.Count == 0) return;
+
+            pathVis.ShowPath(currentOptimalPath);
+            foreach (var n in GraphManager.Instance.Nodes) n.ResetHighlight();
+            foreach (var pn in currentOptimalPath)
+                pn.SetHighlight(new Color(1f, 0.85f, 0.2f, 0.9f));
+            currentOptimalPath[0].SetHighlight(new Color(0.3f, 0.95f, 0.4f, 0.95f));
+            if (currentOptimalPath.Count > 1)
+                currentOptimalPath[currentOptimalPath.Count - 1].SetHighlight(new Color(0.95f, 0.3f, 0.3f, 0.95f));
+            HUDManager.Instance.UpdatePathInfo(BuildPathString(currentOptimalPath, currentOptimalCost));
+        }
+
+        private void ClearHintReveal()
+        {
+            pathVis.ClearPath();
+            HUDManager.Instance.UpdatePathInfo("");
+            foreach (var n in GraphManager.Instance.Nodes) n.ResetHighlight();
+            if (currentOptimalPath != null && currentOptimalPath.Count > 0)
+                currentOptimalPath[0].SetHighlight(new Color(0.3f, 0.95f, 0.4f, 0.95f));
+            var goal = GetCurrentGoal();
+            if (goal != null) goal.SetHighlight(new Color(0.95f, 0.3f, 0.3f, 0.95f));
+        }
+
+        private void HandleDepart(MapNode from, MapNode to)
+        {
+            if (State != GameState.Playing) return;
+
+            if (currentOptimalPath == null || currentOptimalPath.Count < 2)
+            {
+                var goal = GetCurrentGoal();
+                if (goal != null) ComputeAndStoreOptimalPath(to, goal);
+                return;
+            }
+
+            if (currentOptimalPath[1] == to)
+            {
+                // Correct first edge — consume the source node from the path.
+                currentOptimalPath.RemoveAt(0);
+                if (hintTimeRemaining > 0f) RenderHintReveal();
+            }
+            else
+            {
+                // Wrong edge — penalty + recompute Dijkstra from the new node.
+                TimeRemaining -= wrongMovePenaltySeconds;
+                HUDManager.Instance.FlashStatus($"Salah jalan! -{wrongMovePenaltySeconds:0}s");
+                AudioManager.Instance.PlayTimeout();
+
+                var goal = GetCurrentGoal();
+                if (goal != null) ComputeAndStoreOptimalPath(to, goal);
+                if (hintTimeRemaining > 0f)
+                {
+                    hintTimeRemaining = 0f;
+                    ClearHintReveal();
+                }
+            }
+        }
+
+        private string BuildPathString(List<MapNode> path, int totalCost)
+        {
+            if (path == null || path.Count == 0) return "";
             var sb = new StringBuilder();
             sb.Append("Path: ");
-            for (int i = 0; i < result.path.Count; i++)
+            for (int i = 0; i < path.Count; i++)
             {
-                sb.Append(result.path[i].label);
-                if (i < result.path.Count - 1) sb.Append(" -> ");
+                sb.Append(path[i].label);
+                if (i < path.Count - 1) sb.Append(" -> ");
             }
-            sb.Append("  |  Dist: ").Append(result.cost);
-            HUDManager.Instance.UpdatePathInfo(sb.ToString());
+            sb.Append("  |  Dist: ").Append(totalCost);
+            return sb.ToString();
         }
 
         private void EndGame(bool won)

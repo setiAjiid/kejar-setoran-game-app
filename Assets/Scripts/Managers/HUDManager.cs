@@ -132,7 +132,7 @@ namespace KejarSetoran.Managers
             tagRt.anchoredPosition = new Vector2(0, 25); tagRt.sizeDelta = new Vector2(640, 90);
             MakeText(tagCard.transform,
                 "Antar penumpang lewat rute tercepat sebelum waktu habis.\n" +
-                "WASD = jalan   SPACE = jemput/antar   TAB = toggle overlay   ESC = pause",
+                "WASD = jalan   SPACE = jemput/antar   H = HINT path (Rp 200)   TAB = overlay   ESC = pause",
                 17, Vector2.zero, new Vector2(620, 80), new Color(0.85f, 0.88f, 0.95f), FontStyle.Italic);
 
             // Buttons
@@ -266,12 +266,14 @@ namespace KejarSetoran.Managers
             var hr = hint.rectTransform;
             hr.anchorMin = new Vector2(1, 0); hr.anchorMax = new Vector2(1, 0);
             hr.pivot = new Vector2(1, 0);
-            hr.anchoredPosition = new Vector2(-20, 20); hr.sizeDelta = new Vector2(320, 56);
+            hr.anchoredPosition = new Vector2(-20, 20); hr.sizeDelta = new Vector2(340, 78);
 
-            MakeText(hint.transform, "WASD  move   SPACE  pickup/drop", 13, new Vector2(0, 12),
-                new Vector2(300, 20), TextMain, FontStyle.Normal);
-            MakeText(hint.transform, "TAB  toggle overlay   ESC  pause", 13, new Vector2(0, -10),
-                new Vector2(300, 20), Muted, FontStyle.Normal);
+            MakeText(hint.transform, "WASD  move   SPACE  pickup/drop", 13, new Vector2(0, 22),
+                new Vector2(320, 20), TextMain, FontStyle.Normal);
+            MakeText(hint.transform, "H  HINT path (-Rp 200)   TAB  overlay", 13, new Vector2(0, 0),
+                new Vector2(320, 20), Accent, FontStyle.Bold);
+            MakeText(hint.transform, "ESC  pause", 13, new Vector2(0, -22),
+                new Vector2(320, 20), Muted, FontStyle.Normal);
 
             // ---- Pause overlay (last, so it renders on top) ----
             var pauseBg = AddImage(gameHudRoot.transform, "PauseOverlay", FullScreenAnchors());

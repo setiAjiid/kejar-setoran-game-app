@@ -12,6 +12,33 @@ namespace KejarSetoran.Visual
         private static Sprite ringSprite;
         private static Font cachedFont;
         private static readonly Dictionary<string, Sprite> roundedCache = new Dictionary<string, Sprite>();
+        private static readonly Dictionary<string, Sprite[]> stackCache = new Dictionary<string, Sprite[]>();
+
+        // Loads a horizontal sprite-stack strip from Resources/ and slices it
+        // into N square cross-sections of size `sliceSize` x `sliceSize`. N is
+        // derived from texture.width / sliceSize. Slice 0 is the bottom of
+        // the 3D voxel object, slice N-1 is the top.
+        public static Sprite[] LoadStackSlices(string resourcesPath, float pixelsPerUnit, int sliceSize = 16)
+        {
+            string key = resourcesPath + "@" + pixelsPerUnit + "@" + sliceSize;
+            if (stackCache.TryGetValue(key, out var cached)) return cached;
+
+            var tex = Resources.Load<Texture2D>(resourcesPath);
+            if (tex == null) return null;
+            tex.filterMode = FilterMode.Point;
+
+            int frameCount = tex.width / sliceSize;
+            if (frameCount <= 0) return null;
+
+            var sprites = new Sprite[frameCount];
+            for (int i = 0; i < frameCount; i++)
+            {
+                var rect = new Rect(i * sliceSize, 0, sliceSize, sliceSize);
+                sprites[i] = Sprite.Create(tex, rect, new Vector2(0.5f, 0.5f), pixelsPerUnit, 0, SpriteMeshType.FullRect);
+            }
+            stackCache[key] = sprites;
+            return sprites;
+        }
 
         public static Font GetFont()
         {
@@ -212,25 +239,43 @@ namespace KejarSetoran.Visual
             return node;
         }
 
+        // Player visual uses sprite stacking: the source PNG is N horizontal
+        // 16x16 cross-sections of a 3D voxel motorcycle, stacked at runtime
+        // with a small world-Y offset per layer to fake a 3D look on a
+        // top-down ortho camera. Falls back to the procedural cyan circle
+        // when the asset is missing.
+        public const string PlayerSheetResourcePath = "SpriteStack_Cars/RedMotorcycle";
+        public const float PlayerSheetPPU = 32f;        // 32 -> each 16px slice = 0.5 world unit
+        public const float PlayerStackStepWorld = 0.04f; // per-layer Y offset; tune for stronger/weaker 3D feel
+        public const int PlayerSliceBaseSortingOrder = 20;
+
         public static GameObject CreatePlayer(Transform parent)
         {
             var go = new GameObject("Player");
             go.transform.SetParent(parent, false);
-            var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = Circle();
-            sr.color = new Color(0.20f, 0.75f, 1f, 1f);
-            sr.sortingOrder = 20;
-            go.transform.localScale = new Vector3(0.5f, 0.5f, 1f);
 
-            var dotGO = new GameObject("Dot");
-            dotGO.transform.SetParent(go.transform, false);
-            dotGO.transform.localPosition = new Vector3(0.18f, 0.18f, 0f);
-            dotGO.transform.localScale = new Vector3(0.3f, 0.3f, 1f);
-            var dot = dotGO.AddComponent<SpriteRenderer>();
-            dot.sprite = Circle();
-            dot.color = Color.white;
-            dot.sortingOrder = 21;
-
+            var slices = LoadStackSlices(PlayerSheetResourcePath, PlayerSheetPPU);
+            if (slices != null && slices.Length > 0)
+            {
+                for (int i = 0; i < slices.Length; i++)
+                {
+                    var layer = new GameObject("Slice_" + i);
+                    layer.transform.SetParent(go.transform, false);
+                    layer.transform.localPosition = new Vector3(0f, i * PlayerStackStepWorld, 0f);
+                    var lsr = layer.AddComponent<SpriteRenderer>();
+                    lsr.sprite = slices[i];
+                    lsr.color = Color.white;
+                    lsr.sortingOrder = PlayerSliceBaseSortingOrder + i;
+                }
+            }
+            else
+            {
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = Circle();
+                sr.color = new Color(0.20f, 0.75f, 1f, 1f);
+                sr.sortingOrder = PlayerSliceBaseSortingOrder;
+                go.transform.localScale = new Vector3(0.5f, 0.5f, 1f);
+            }
             return go;
         }
 
